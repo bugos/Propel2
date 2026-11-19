@@ -5069,6 +5069,29 @@ abstract class " . $this->getUnqualifiedClassName() . $parentClass . ' implement
     }
 
     /**
+     * Returns object property names holding scheduled deletions for the given incoming foreign key.
+     *
+     * @param \Propel\Generator\Model\ForeignKey $foreignKey
+     *
+     * @return array<string>
+     */
+    public function getScheduledDeletionVarNames(ForeignKey $foreignKey): array
+    {
+        $varNames = [];
+        if (!$foreignKey->isLocalPrimaryKey()) {
+            $varNames[] = lcfirst((string)$this->getRefFKPhpNameAffix($foreignKey, true)) . 'ScheduledForDeletion';
+        }
+
+        foreach ($this->getTable()->getCrossFks() as $crossFKs) {
+            if ($crossFKs->getIncomingForeignKey() === $foreignKey) {
+                $varNames[] = $this->getCrossScheduledForDeletionVarName($crossFKs);
+            }
+        }
+
+        return $varNames;
+    }
+
+    /**
      * @param string $script
      * @param \Propel\Generator\Model\ForeignKey $crossFK
      *
@@ -6332,6 +6355,16 @@ abstract class " . $this->getUnqualifiedClassName() . $parentClass . ' implement
             }
         }
 
+        $hasPostDoSave = $this->hasBehaviorModifier('postDoSave');
+        if ($hasPostDoSave) {
+            $script .= "
+            \$isInsert = \$this->isNew();
+            \$wasPersisted = false;";
+        }
+        if ($this->hasBehaviorModifier('preDoSave')) {
+            $this->applyBehaviorModifier('preDoSave', $script, '            ');
+        }
+
         $script .= "
             if (\$this->isNew() || \$this->isModified()) {
                 // persist changes
@@ -6370,7 +6403,12 @@ abstract class " . $this->getUnqualifiedClassName() . $parentClass . ' implement
         }
 
         $script .= "
-                \$this->resetModified();
+                \$this->resetModified();";
+        if ($hasPostDoSave) {
+            $script .= "
+                \$wasPersisted = true;";
+        }
+        $script .= "
             }
 ";
 
@@ -6406,6 +6444,10 @@ abstract class " . $this->getUnqualifiedClassName() . $parentClass . ' implement
             }
         }
 
+        if ($hasPostDoSave) {
+            $this->addDoSavePostReferrers($script, $reloadOnUpdate);
+        }
+
         $script .= "
             \$this->alreadyInSave = false;
 ";
@@ -6421,6 +6463,45 @@ abstract class " . $this->getUnqualifiedClassName() . $parentClass . ' implement
 
         return \$affectedRows;
     }
+";
+    }
+
+    /**
+     * Emits post-referrer doSave() behavior hooks (e.g. deferred aggregate recomputation)
+     * and persists any resulting column changes in a single update.
+     *
+     * @param string $script The script will be modified in this method.
+     * @param bool $reloadOnUpdate
+     *
+     * @return void
+     */
+    protected function addDoSavePostReferrers(string &$script, bool $reloadOnUpdate): void
+    {
+        $this->applyBehaviorModifier('postDoSave', $script, '            ');
+        if ($this->hasBehaviorModifier('preUpdate')) {
+            // Only apply preUpdate behavior modifiers (e.g. timestampable) when an
+            // existing row was unmodified before doSave() and became dirty afterward.
+            $script .= "
+            if (!\$isInsert && !\$wasPersisted && \$this->isModified()) {";
+            $this->applyBehaviorModifier('preUpdate', $script, '                ');
+            $script .= "
+            }";
+        }
+        $script .= "
+            if (\$this->isModified()) {
+                \$updatedRows = \$this->doUpdate(\$con);
+                if (!\$wasPersisted) {
+                    \$affectedRows += \$updatedRows;
+                }";
+        if ($reloadOnUpdate) {
+            $script .= "
+                if (!\$skipReload) {
+                    \$reloadObject = true;
+                }";
+        }
+        $script .= "
+                \$this->resetModified();
+            }
 ";
     }
 

@@ -82,6 +82,51 @@ class AggregateColumnBehavior extends Behavior
     }
 
     /**
+     * @return string
+     */
+    public function objectAttributes(): string
+    {
+        $columnPhpName = $this->getColumn()->getPhpName();
+
+        return "/**
+ * Tracks deferred aggregate recomputation during a parent cascade save().
+ *
+ * @var bool
+ */
+protected \$needUpdate{$columnPhpName} = false;
+";
+    }
+
+    /**
+     * @param \Propel\Generator\Builder\Om\ObjectBuilder $builder
+     *
+     * @return string
+     */
+    public function preDoSave(ObjectBuilder $builder): string
+    {
+        $columnPhpName = $this->getColumn()->getPhpName();
+        $conditions = array_map(
+            static function (string $var): string {
+                return "(\$this->{$var} !== null && !\$this->{$var}->isEmpty())";
+            },
+            $builder->getScheduledDeletionVarNames($this->getForeignKey()),
+        );
+        $initialValue = $conditions ? implode(' || ', $conditions) : 'false';
+
+        return "\$this->needUpdate{$columnPhpName} = {$initialValue};";
+    }
+
+    /**
+     * @return string
+     */
+    public function postDoSave(): string
+    {
+        return $this->renderTemplate('objectPostDoSave', [
+            'column' => $this->getColumn(),
+        ]);
+    }
+
+    /**
      * @param \Propel\Generator\Builder\Om\ObjectBuilder $builder
      *
      * @throws \InvalidArgumentException
